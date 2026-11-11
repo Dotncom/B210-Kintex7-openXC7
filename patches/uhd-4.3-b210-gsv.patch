@@ -1,0 +1,205 @@
+diff --git a/host/lib/usrp/b200/b200_impl.cpp b/host/lib/usrp/b200/b200_impl.cpp
+--- a/host/lib/usrp/b200/b200_impl.cpp
++++ b/host/lib/usrp/b200/b200_impl.cpp
+@@ -533,6 +533,10 @@
+         _tree->create<sensor_value_t>(mb_path / "sensors" / "gnss_rmc")
+             .set_publisher([uart]() {
+                 return sensor_value_t("GNSS RMC", uart->read_nmea(false), "");
++            });
++        _tree->create<sensor_value_t>(mb_path / "sensors" / "gnss_gsv")
++            .set_publisher([uart]() {
++                return sensor_value_t("GNSS GSV", uart->read_gsv(), "");
+             });
+     } else if (_gpsdo_capable) {
+         if ((_local_ctrl->peek32(RB32_CORE_STATUS) & 0xff) != B200_GPSDO_ST_NONE) {
+diff --git a/host/lib/usrp/b200/b200_uart.cpp b/host/lib/usrp/b200/b200_uart.cpp
+--- a/host/lib/usrp/b200/b200_uart.cpp
++++ b/host/lib/usrp/b200/b200_uart.cpp
+@@ -6,6 +6,7 @@
+ //
+ 
+ #include "b200_uart.hpp"
++#include "b200_gsv_cache.hpp"
+ #include "b200_impl.hpp"
+ #include <uhd/exception.hpp>
+ #include <uhd/transport/bounded_buffer.hpp>
+@@ -83,6 +84,12 @@
+         return sample.line;
+     }
+ 
++    std::string read_gsv() override
++    {
++        std::lock_guard<std::mutex> lock(_nmea_mutex);
++        return _gsv.read(std::chrono::steady_clock::now());
++    }
++
+     void handle_uart_packet(managed_recv_buffer::sptr buff) override
+     {
+         const uint32_t* packet_buff = buff->cast<const uint32_t*>();
+@@ -135,12 +142,17 @@
+             || _line[checksum_pos + 2] != hex[checksum & 15])
+             return;
+         const auto type = _line.substr(3, 3);
+-        if (type != "GGA" && type != "RMC")
++        if (type != "GGA" && type != "RMC" && type != "GSV")
+             return;
+         std::lock_guard<std::mutex> lock(_nmea_mutex);
++        const auto now = std::chrono::steady_clock::now();
++        if (type == "GSV") {
++            _gsv.receive(_line, now);
++            return;
++        }
+         auto& sample = type == "GGA" ? _gga : _rmc;
+         sample.line = _line;
+-        sample.received = std::chrono::steady_clock::now();
++        sample.received = now;
+     }
+ 
+     struct nmea_sample
+@@ -158,6 +170,7 @@
+     std::string _line;
+     std::mutex _nmea_mutex;
+     nmea_sample _gga, _rmc;
++    b200_gsv_cache _gsv;
+ };
+ 
+ 
+diff --git a/host/lib/usrp/b200/b200_uart.hpp b/host/lib/usrp/b200/b200_uart.hpp
+--- a/host/lib/usrp/b200/b200_uart.hpp
++++ b/host/lib/usrp/b200/b200_uart.hpp
+@@ -22,6 +22,7 @@
+         uint32_t sid,
+         uint32_t gnss_baud = 0);
+     virtual std::string read_nmea(bool gga) = 0;
++    virtual std::string read_gsv() = 0;
+     virtual void handle_uart_packet(uhd::transport::managed_recv_buffer::sptr buff) = 0;
+ };
+ 
+diff --git a/host/lib/usrp/b200/b200_gsv_cache.hpp b/host/lib/usrp/b200/b200_gsv_cache.hpp
+new file mode 100644
+--- /dev/null
++++ b/host/lib/usrp/b200/b200_gsv_cache.hpp
+@@ -0,0 +1,123 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++
++#include <algorithm>
++#include <chrono>
++#include <map>
++#include <string>
++#include <utility>
++#include <vector>
++
++// Caller serializes access and validates the NMEA checksum before caching.
++class b200_gsv_cache
++{
++public:
++    using clock = std::chrono::steady_clock;
++
++    void receive(const std::string& line, clock::time_point now)
++    {
++        const auto checksum = line.find('*');
++        if (line.size() < 10 || line[0] != '$' || line.compare(3, 4, "GSV,") != 0
++            || checksum == std::string::npos || checksum < 7)
++            return;
++
++        std::vector<std::string> fields;
++        for (size_t pos = 7; pos <= checksum;) {
++            const size_t end = std::min(line.find(',', pos), checksum);
++            fields.emplace_back(line, pos, end - pos);
++            pos = end + 1;
++        }
++        if (fields.size() < 3 || fields.size() > 20)
++            return;
++        const auto total = number(fields[0]);
++        const auto index = number(fields[1]);
++        const auto satellites = number(fields[2]);
++        const auto trailing = (fields.size() - 3) % 4;
++        if (total < 1 || total > 16 || index < 1 || index > total
++            || satellites < 0 || trailing > 1)
++            return;
++
++        const auto key = std::make_pair(line.substr(1, 2),
++            trailing == 1 ? fields.back() : std::string{});
++        auto found = _cycles.find(key);
++        if (found == _cycles.end()) {
++            if (index != 1)
++                return;
++            if (_cycles.size() >= 32) {
++                const auto oldest = std::min_element(_cycles.begin(),
++                    _cycles.end(),
++                    [](const auto& a, const auto& b) {
++                        return a.second.started < b.second.started;
++                    });
++                _cycles.erase(oldest);
++            }
++            found = _cycles.emplace(key, cycle{}).first;
++        }
++
++        auto& pending = found->second;
++        if (index == 1) {
++            pending.started = now;
++            pending.satellites = satellites;
++            pending.fragments.assign(total, {});
++        }
++        if (pending.fragments.size() != size_t(total) || pending.satellites != satellites
++            || now - pending.started > std::chrono::seconds(3))
++            return;
++        pending.fragments[index - 1] = line;
++        if (std::any_of(pending.fragments.begin(),
++                pending.fragments.end(),
++                [](const auto& fragment) { return fragment.empty(); }))
++            return;
++
++        pending.complete.clear();
++        for (const auto& fragment : pending.fragments) {
++            if (!pending.complete.empty())
++                pending.complete += '\n';
++            pending.complete += fragment;
++        }
++        pending.received = now;
++        pending.fragments.clear();
++    }
++
++    std::string read(clock::time_point now) const
++    {
++        std::string result;
++        for (const auto& entry : _cycles) {
++            const auto& item = entry.second;
++            if (item.complete.empty() || now - item.received > std::chrono::seconds(10))
++                continue;
++            const auto separator = result.empty() ? 0U : 1U;
++            if (result.size() + separator + item.complete.size() > 16384)
++                continue;
++            if (separator)
++                result += '\n';
++            result += item.complete;
++        }
++        return result;
++    }
++
++private:
++    static int number(const std::string& field)
++    {
++        if (field.empty() || field.size() > 3)
++            return -1;
++        int result = 0;
++        for (const auto ch : field) {
++            if (ch < '0' || ch > '9')
++                return -1;
++            result = result * 10 + (ch - '0');
++        }
++        return result;
++    }
++
++    struct cycle
++    {
++        clock::time_point started{};
++        clock::time_point received{};
++        int satellites = 0;
++        std::vector<std::string> fragments;
++        std::string complete;
++    };
++
++    std::map<std::pair<std::string, std::string>, cycle> _cycles;
++};

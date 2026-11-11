@@ -1,0 +1,92 @@
+--- a/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/top/b200/b200_core.v
++++ b/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/top/b200/b200_core.v
+@@ -107,7 +106,0 @@
+-    // Flop PPS signals into radio clock domain
+-    reg [1:0] 	 gpsdo_pps_del, ext_pps_del, int_pps_del;
+-    always @(posedge radio_clk) ext_pps_del[1:0] <= {ext_pps_del[0], pps_ext};
+-    always @(posedge radio_clk) gpsdo_pps_del[1:0] <= {gpsdo_pps_del[0], pps_int};
+-    always @(posedge radio_clk) int_pps_del[1:0] <= {int_pps_del[0], int_pps};
+-
+-    // PPS mux
+@@ -115,4 +108,5 @@
+-    assign pps =  (pps_select == 2'b00)? gpsdo_pps_del[1] :
+-                (pps_select == 2'b01)? ext_pps_del[1] :
+-                (pps_select == 2'b10)? int_pps_del[1] :
+-                1'b0;
++    b210_pps pps_inputs (
++        .clk(radio_clk), .reset(radio_rst),
++        .gps_pps(pps_int), .external_pps(pps_ext), .internal_pps(int_pps),
++        .source(pps_select), .pps(pps)
++    );
+@@ -308 +302 @@
+-      .NEW_HB_DECIM(1),
++      .NEW_HB_DECIM(0),
+@@ -328,29 +321,0 @@
+-`ifdef TARGET_B210 // B210 Has two radio instances.
+-   assign      radio_st = 8'h2;
+-
+-   wire [63:0] radio1_debug;
+-   wire [31:0] fe1_gpio_out32;
+-   assign fe1_gpio_out = fe1_gpio_out32[7:0];
+-
+-   radio_legacy #(
+-      .RADIO_FIFO_SIZE(RADIO_FIFO_SIZE),
+-      .SAMPLE_FIFO_SIZE(SAMPLE_FIFO_SIZE),
+-      .FP_GPIO(0),
+-      .NEW_HB_INTERP(1),
+-      .NEW_HB_DECIM(1),
+-      .SOURCE_FLOW_CONTROL(0),
+-      .USER_SETTINGS(0),
+-      .DEVICE("7SERIES")
+-   ) radio_1 (
+-      .radio_clk(radio_clk), .radio_rst(radio_rst),
+-      .rx(rx1), .tx(tx1), .pps(pps), .time_sync(time_sync_r),
+-      .fe_gpio_in(32'h00000000), .fe_gpio_out(fe1_gpio_out32), .fe_gpio_ddr(/* Always assumed to be outputs */),
+-      .fp_gpio_in(32'h00000000), .fp_gpio_out(), .fp_gpio_ddr(),
+-      .bus_clk(bus_clk), .bus_rst(bus_rst),
+-      .tx_tdata(r1_tx_tdata), .tx_tlast(r1_tx_tlast), .tx_tvalid(r1_tx_tvalid), .tx_tready(r1_tx_tready),
+-      .rx_tdata(r1_rx_tdata), .rx_tlast(r1_rx_tlast),  .rx_tvalid(r1_rx_tvalid), .rx_tready(r1_rx_tready),
+-      .ctrl_tdata(r1_ctrl_tdata), .ctrl_tlast(r1_ctrl_tlast),  .ctrl_tvalid(r1_ctrl_tvalid), .ctrl_tready(r1_ctrl_tready),
+-      .resp_tdata(r1_resp_tdata), .resp_tlast(r1_resp_tlast),  .resp_tvalid(r1_resp_tvalid), .resp_tready(r1_resp_tready),
+-      .debug(radio1_debug)
+-   );
+-`else
+@@ -375 +339,0 @@
+-`endif // !`ifdef TARGET_B210
+--- a/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/top/b200/b200_io.v
++++ b/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/top/b200/b200_io.v
+@@ -37,9 +37,2 @@
+-  wire mimo_sync;
+-  synchronizer synchronizer_mimo (.clk(radio_clk), .rst(radio_rst), .in(mimo), .out(mimo_sync));
+-
+-  /****************************************************************************
+-  ** RX Capture Interface
+-  ****************************************************************************/
+-  wire rx_clk_bufr; // Capture clock
+-  wire rx_clk_mimo_bufr;
+-
++  localparam mimo_sync = 1'b0;
++  wire rx_clk_bufr;
+@@ -47,21 +40 @@
+-
+-  BUFR #(
+-   .BUFR_DIVIDE("2"),   // Values: "BYPASS, 1, 2, 3, 4, 5, 6, 7, 8"
+-   .SIM_DEVICE("7SERIES")  // Must be set to "7SERIES"
+-  )
+-  BUFR_inst (
+-    .O(rx_clk_mimo_bufr),
+-    .CE(1'b1),
+-    .CLR(areset),
+-    .I(rx_clk)
+-  );
+-
+-  BUFGMUX #(
+-    )
+-    BUFGMUX_inst (
+-       .O(radio_clk),
+-       .I0(rx_clk_bufr),
+-       .I1(rx_clk_mimo_bufr),
+-       .S(mimo_sync)
+-    );
+-
++  assign radio_clk = rx_clk_bufr;

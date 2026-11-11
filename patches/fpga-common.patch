@@ -1,0 +1,105 @@
+--- a/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/lib/vita_200/chdr_16sc_to_12sc.v
++++ b/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/lib/vita_200/chdr_16sc_to_12sc.v
+@@ -235,0 +236 @@
++      default:  curr_word <= 64'd0;
+--- a/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/lib/dsp/ddc_chain.v
++++ b/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/lib/dsp/ddc_chain.v
+@@ -264 +264 @@
+-	   (.clk(clk), .in(i_unscaled_rnd), .strobe_in(strobe_unscaled), .out(i_unscaled_clip[17:0]), .strobe_out(strobe_unscaled_clip));
++	   (.clk(clk), .reset(rst), .in(i_unscaled_rnd), .strobe_in(strobe_unscaled), .out(i_unscaled_clip[17:0]), .strobe_out(strobe_unscaled_clip));
+@@ -266 +266 @@
+-	   (.clk(clk), .in(q_unscaled_rnd), .strobe_in(strobe_unscaled), .out(q_unscaled_clip[17:0]), .strobe_out());
++	   (.clk(clk), .reset(rst), .in(q_unscaled_rnd), .strobe_in(strobe_unscaled), .out(q_unscaled_clip[17:0]), .strobe_out());
+@@ -301 +301 @@
+-	   (.clk(clk), .in(prod_i[35:0]), .strobe_in(strobe_scaled), .out(i_clip), .strobe_out(strobe_clip));
++	   (.clk(clk), .reset(rst), .in(prod_i[35:0]), .strobe_in(strobe_scaled), .out(i_clip), .strobe_out(strobe_clip));
+@@ -303 +303 @@
+-	   (.clk(clk), .in(prod_q[35:0]), .strobe_in(strobe_scaled), .out(q_clip), .strobe_out());
++	   (.clk(clk), .reset(rst), .in(prod_q[35:0]), .strobe_in(strobe_scaled), .out(q_clip), .strobe_out());
+@@ -360 +360 @@
+-	   (.clk(clk), .in(i_hb_out_rnd), .strobe_in(strobe_hb2), .out(i_unscaled_clip[17:0]), .strobe_out(strobe_unscaled_clip));
++	   (.clk(clk), .reset(rst), .in(i_hb_out_rnd), .strobe_in(strobe_hb2), .out(i_unscaled_clip[17:0]), .strobe_out(strobe_unscaled_clip));
+@@ -362 +362 @@
+-	   (.clk(clk), .in(q_hb_out_rnd), .strobe_in(strobe_hb2), .out(q_unscaled_clip[17:0]), .strobe_out());
++	   (.clk(clk), .reset(rst), .in(q_hb_out_rnd), .strobe_in(strobe_hb2), .out(q_unscaled_clip[17:0]), .strobe_out());
+@@ -396 +396 @@
+-	   (.clk(clk), .in(prod_i[35:0]), .strobe_in(strobe_scaled), .out(i_clip), .strobe_out(strobe_clip));
++	   (.clk(clk), .reset(rst), .in(prod_i[35:0]), .strobe_in(strobe_scaled), .out(i_clip), .strobe_out(strobe_clip));
+@@ -398 +398 @@
+-	   (.clk(clk), .in(prod_q[35:0]), .strobe_in(strobe_scaled), .out(q_clip), .strobe_out());
++	   (.clk(clk), .reset(rst), .in(prod_q[35:0]), .strobe_in(strobe_scaled), .out(q_clip), .strobe_out());
+--- a/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/lib/vita_200/new_rx_framer.v
++++ b/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/lib/vita_200/new_rx_framer.v
+@@ -264 +264 @@
+-   assign debug = {
++   assign debug = {run & strobe,
+--- a/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/lib/radio_200/radio_legacy.v
++++ b/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/lib/radio_200/radio_legacy.v
+@@ -230 +230,2 @@
+-//     3'd6 : rb_data <= <unused>;
++       3'd6 : rb_data <= {trial_cic_count, trial_ddc_count,
++                          trial_framer_count, trial_output_count};
+@@ -443 +444,20 @@
+-   wire [31:0] 	     debug_ddc_chain;
++
++   wire [31:0] debug_ddc_chain;
++   reg [15:0] trial_cic_count, trial_ddc_count, trial_framer_count, trial_output_count;
++   always @(posedge radio_clk) begin
++      if (radio_rst) begin
++         trial_cic_count <= 0;
++         trial_ddc_count <= 0;
++         trial_framer_count <= 0;
++         trial_output_count <= 0;
++      end else begin
++         if (debug_ddc_chain[2])
++            trial_cic_count <= trial_cic_count + 1'b1;
++         if (strobe_rx)
++            trial_ddc_count <= trial_ddc_count + 1'b1;
++         if (debug_rx_framer[16])
++            trial_framer_count <= trial_framer_count + 1'b1;
++         if (rx_tvalid_i && rx_tready_i)
++            trial_output_count <= trial_output_count + 1'b1;
++      end
++   end
+--- a/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/top/b200/b200.v
++++ b/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/top/b200/b200.v
+@@ -81 +81 @@
+-   // GPS
++   input wire gps_txd,
+@@ -142,9 +142,3 @@
+-    b200_clk_gen gen_clks
+-    (
+-        .clk_in1_p(codec_main_clk_p),
+-        .clk_in1_n(codec_main_clk_n),
+-        .CLK_OUT1_40_int(),
+-        .CLK_OUT2_100_gpif(gpif_clk),
+-        .CLK_OUT3_100_bus(),
+-        .reset(reset_global),
+-        .locked(locked)
++    b210_clock gen_clks (
++        .ref_p(codec_main_clk_p), .ref_n(codec_main_clk_n),
++        .reset(reset_global), .clk100(gpif_clk), .locked(locked)
+@@ -160,2 +154,3 @@
+-    always @(posedge bus_clk or posedge reset_global or negedge locked) begin
+-        if (reset_global | !locked) begin
++    wire clocks_ready_reset = reset_global | !locked;
++    always @(posedge bus_clk or posedge clocks_ready_reset) begin
++        if (clocks_ready_reset) begin
+@@ -208,12 +202,0 @@
+-    ///////////////////////////////////////////////////////////////////////
+-    // PPS Switch 1.GPS_PPS 2.EXT_PPS
+-    ///////////////////////////////////////////////////////////////////////
+-   wire pps_ext_int;
+-   pps_switch u_pps_switch (
+-        .clk      (gpif_clk),
+-        .rst_n    (!gpif_rst),
+-        .gps_pps  (PPS_IN_INT),
+-        .ext_pps  (PPS_IN_EXT),
+-        .pps_out  (pps_ext_int)
+-    );
+-
+@@ -340,2 +323,2 @@
+-      .pps_int(pps_ext_int), .pps_ext(pps_ext_int),
+-      // .rxd(gps_txd), .txd(gps_rxd),
++      .pps_int(PPS_IN_INT), .pps_ext(PPS_IN_EXT),
++       .rxd(gps_txd), .txd(),

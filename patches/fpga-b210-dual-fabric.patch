@@ -1,0 +1,49 @@
+--- a/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/top/b200/b200_core.v
++++ b/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/top/b200/b200_core.v
+@@ -107,7 +106,0 @@
+-    // Flop PPS signals into radio clock domain
+-    reg [1:0] 	 gpsdo_pps_del, ext_pps_del, int_pps_del;
+-    always @(posedge radio_clk) ext_pps_del[1:0] <= {ext_pps_del[0], pps_ext};
+-    always @(posedge radio_clk) gpsdo_pps_del[1:0] <= {gpsdo_pps_del[0], pps_int};
+-    always @(posedge radio_clk) int_pps_del[1:0] <= {int_pps_del[0], int_pps};
+-
+-    // PPS mux
+@@ -115,4 +108,5 @@
+-    assign pps =  (pps_select == 2'b00)? gpsdo_pps_del[1] :
+-                (pps_select == 2'b01)? ext_pps_del[1] :
+-                (pps_select == 2'b10)? int_pps_del[1] :
+-                1'b0;
++    b210_pps pps_inputs (
++        .clk(radio_clk), .reset(radio_rst),
++        .gps_pps(pps_int), .external_pps(pps_ext), .internal_pps(int_pps),
++        .source(pps_select), .pps(pps)
++    );
+@@ -308 +302 @@
+-      .NEW_HB_DECIM(1),
++      .NEW_HB_DECIM(0),
+@@ -340 +334 @@
+-      .NEW_HB_DECIM(1),
++      .NEW_HB_DECIM(0),
+--- a/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/top/b200/b200_io.v
++++ b/B210_Project_Firmwire.srcs/sources_1/imports/B210_Project_Firmwire/top/b200/b200_io.v
+@@ -44 +44 @@
+-  wire rx_clk_mimo_bufr;
++  reg rx_clk_mimo_bufr = 1'b0;
+@@ -48,10 +48,7 @@
+-  BUFR #(
+-   .BUFR_DIVIDE("2"),   // Values: "BYPASS, 1, 2, 3, 4, 5, 6, 7, 8"
+-   .SIM_DEVICE("7SERIES")  // Must be set to "7SERIES"
+-  )
+-  BUFR_inst (
+-    .O(rx_clk_mimo_bufr),
+-    .CE(1'b1),
+-    .CLR(areset),
+-    .I(rx_clk)
+-  );
++  // Trial for the open router's missing BUFR-to-BUFGMUX arc.
++  always @(posedge rx_clk_bufr or posedge areset) begin
++    if (areset)
++      rx_clk_mimo_bufr <= 1'b0;
++    else
++      rx_clk_mimo_bufr <= !rx_clk_mimo_bufr;
++  end

@@ -1,0 +1,9 @@
+/build/
+/work/
+__pycache__/
+*.bin
+*.bit
+*.bits
+*.bba
+*.fasm
+*.log

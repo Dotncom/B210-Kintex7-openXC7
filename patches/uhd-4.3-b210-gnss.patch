@@ -1,0 +1,173 @@
+--- a/host/lib/usrp/b200/b200_impl.cpp
++++ b/host/lib/usrp/b200/b200_impl.cpp
+@@ -492,9 +492,13 @@
+     ////////////////////////////////////////////////////////////////////
+     _async_task_data.reset(new AsyncTaskData());
+     _async_task_data->async_md.reset(new async_md_type(1000 /*messages deep*/));
++    const auto gnss_baud = device_addr.cast<uint32_t>("b210_gnss_baud", 0);
++    if (gnss_baud && (_product != B210 || gnss_baud < 4800 || gnss_baud > 115200)) {
++        throw uhd::value_error("b210_gnss_baud requires a B210 and 4800 to 115200 baud");
++    }
+     if (_gpsdo_capable) {
+         _async_task_data->gpsdo_uart =
+-            b200_uart::make(_ctrl_transport, B200_TX_GPS_UART_SID);
++            b200_uart::make(_ctrl_transport, B200_TX_GPS_UART_SID, gnss_baud);
+     }
+     _async_task = uhd::msg_task::make(std::bind(
+         &b200_impl::handle_async_task, this, _ctrl_transport, _async_task_data));
+@@ -518,7 +522,19 @@
+     ////////////////////////////////////////////////////////////////////
+     // Create the GPSDO control
+     ////////////////////////////////////////////////////////////////////
+-    if (_gpsdo_capable) {
++    if (gnss_baud) {
++        const auto uart = _async_task_data->gpsdo_uart;
++        // The FPGA consumes the first write as UART setup. Its TX pin is disconnected.
++        uart->write_uart(" ");
++        _tree->create<sensor_value_t>(mb_path / "sensors" / "gnss_gga")
++            .set_publisher([uart]() {
++                return sensor_value_t("GNSS GGA", uart->read_nmea(true), "");
++            });
++        _tree->create<sensor_value_t>(mb_path / "sensors" / "gnss_rmc")
++            .set_publisher([uart]() {
++                return sensor_value_t("GNSS RMC", uart->read_nmea(false), "");
++            });
++    } else if (_gpsdo_capable) {
+         if ((_local_ctrl->peek32(RB32_CORE_STATUS) & 0xff) != B200_GPSDO_ST_NONE) {
+             UHD_LOGGER_INFO("B200") << "Detecting internal GPSDO.... " << std::flush;
+             try {
+--- a/host/lib/usrp/b200/b200_uart.cpp
++++ b/host/lib/usrp/b200/b200_uart.cpp
+@@ -13,17 +13,20 @@
+ #include <uhd/types/time_spec.hpp>
+ #include <uhd/utils/byteswap.hpp>
+ #include <uhd/utils/log.hpp>
++#include <chrono>
++#include <mutex>
+ 
+ using namespace uhd;
+ using namespace uhd::transport;
+ 
+ struct b200_uart_impl : b200_uart
+ {
+-    b200_uart_impl(zero_copy_if::sptr xport, const uint32_t sid)
++    b200_uart_impl(zero_copy_if::sptr xport, uint32_t sid, uint32_t gnss_baud)
+         : _xport(xport)
+         , _sid(sid)
+         , _count(0)
+-        , _baud_div(std::floor(B200_BUS_CLOCK_RATE / 115200 + 0.5))
++        , _nmea_only(gnss_baud != 0)
++        , _baud_div(std::floor(B200_BUS_CLOCK_RATE / (gnss_baud ? gnss_baud : 115200) + 0.5))
+         , _line_queue(4096)
+     {
+         /*NOP*/
+@@ -71,6 +74,15 @@
+         return line;
+     }
+ 
++    std::string read_nmea(bool gga) override
++    {
++        std::lock_guard<std::mutex> lock(_nmea_mutex);
++        const auto& sample = gga ? _gga : _rmc;
++        if (std::chrono::steady_clock::now() - sample.received > std::chrono::seconds(3))
++            return {};
++        return sample.line;
++    }
++
+     void handle_uart_packet(managed_recv_buffer::sptr buff) override
+     {
+         const uint32_t* packet_buff = buff->cast<const uint32_t*>();
+@@ -79,6 +91,10 @@
+         packet_info.num_packet_words32 = buff->size() / sizeof(uint32_t);
+         vrt::if_hdr_unpack_le(packet_buff, packet_info);
+         const char ch = char(uhd::wtohx(packet_buff[packet_info.num_header_words32 + 1]));
++        if (_nmea_only) {
++            receive_nmea_char(ch);
++            return;
++        }
+         _line += ch;
+         if (ch == '\n') {
+             _line_queue.push_with_pop_on_full(_line);
+@@ -86,16 +102,66 @@
+         }
+     }
+ 
++    void receive_nmea_char(char ch)
++    {
++        if (ch == '$') {
++            _line = "$";
++            return;
++        }
++        if (_line.empty() || ch == '\r')
++            return;
++        if (ch == '\n') {
++            cache_nmea_line();
++            _line.clear();
++        } else if (_line.size() < 128 && ch >= ' ' && ch <= '~') {
++            _line += ch;
++        } else {
++            _line.clear();
++        }
++    }
++
++    void cache_nmea_line()
++    {
++        if (_line.size() < 10 || _line[6] != ',')
++            return;
++        const auto checksum_pos = _line.size() - 3;
++        if (_line[checksum_pos] != '*')
++            return;
++        unsigned checksum = 0;
++        for (size_t i = 1; i < checksum_pos; ++i)
++            checksum ^= static_cast<unsigned char>(_line[i]);
++        const char* hex = "0123456789ABCDEF";
++        if (_line[checksum_pos + 1] != hex[checksum >> 4]
++            || _line[checksum_pos + 2] != hex[checksum & 15])
++            return;
++        const auto type = _line.substr(3, 3);
++        if (type != "GGA" && type != "RMC")
++            return;
++        std::lock_guard<std::mutex> lock(_nmea_mutex);
++        auto& sample = type == "GGA" ? _gga : _rmc;
++        sample.line = _line;
++        sample.received = std::chrono::steady_clock::now();
++    }
++
++    struct nmea_sample
++    {
++        std::string line;
++        std::chrono::steady_clock::time_point received;
++    };
++
+     const zero_copy_if::sptr _xport;
+     const uint32_t _sid;
+     size_t _count;
++    const bool _nmea_only;
+     size_t _baud_div;
+     bounded_buffer<std::string> _line_queue;
+     std::string _line;
++    std::mutex _nmea_mutex;
++    nmea_sample _gga, _rmc;
+ };
+ 
+ 
+-b200_uart::sptr b200_uart::make(zero_copy_if::sptr xport, const uint32_t sid)
++b200_uart::sptr b200_uart::make(zero_copy_if::sptr xport, uint32_t sid, uint32_t gnss_baud)
+ {
+-    return b200_uart::sptr(new b200_uart_impl(xport, sid));
++    return b200_uart::sptr(new b200_uart_impl(xport, sid, gnss_baud));
+ }
+--- a/host/lib/usrp/b200/b200_uart.hpp
++++ b/host/lib/usrp/b200/b200_uart.hpp
+@@ -18,7 +18,10 @@
+ {
+ public:
+     typedef std::shared_ptr<b200_uart> sptr;
+-    static sptr make(uhd::transport::zero_copy_if::sptr, const uint32_t sid);
++    static sptr make(uhd::transport::zero_copy_if::sptr,
++        uint32_t sid,
++        uint32_t gnss_baud = 0);
++    virtual std::string read_nmea(bool gga) = 0;
+     virtual void handle_uart_packet(uhd::transport::managed_recv_buffer::sptr buff) = 0;
+ };
+ 

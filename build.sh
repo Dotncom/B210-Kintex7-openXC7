@@ -30,7 +30,8 @@ echo "Synthesizing. Log: $work/synth.log"
 python3 "$root/check-ddc-strobe.py" b210.json --radios "$radios"
 echo "Routing. Log: $work/route.log"
 "$toolchain/bin/nextpnr-himbaechel" --chipdb "$chipdb" \
-    --device xc7k325tffg676-2 -o xdc=pins.xdc --sdc clocks.sdc --json b210.json \
+    --device xc7k325tffg676-2 --placer "${B210_PLACER:-heap}" --threads "${B210_THREADS:-1}" \
+    -o xdc=pins.xdc --sdc clocks.sdc --json b210.json \
     -o "fasm=$work/routed.fasm" --report "$work/route.json" >"$work/route.log" 2>&1
 python3 "$root/verify-dual-fabric-route.py" "$work/route.log" --netlist b210.json --radios "$radios"
 

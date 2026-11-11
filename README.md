@@ -32,22 +32,26 @@ directory containing `bitread` and `xc7patch`. Set `B210_CHIPDB` to the
 `xc7k325t.bin` matching that nextpnr installation, or generate it with:
 
 ```sh
-mkdir -p work
-bash make-chipdb.sh work/chipdb
-export B210_CHIPDB="$PWD/work/chipdb/xc7k325t.bin"
-bash build.sh /path/to/B210_Project_Firmwire b210-dual-fabric work/dual
+mkdir -p "$HOME/b210-work"
+bash make-chipdb.sh "$HOME/b210-work/chipdb"
+export B210_CHIPDB="$HOME/b210-work/chipdb/xc7k325t.bin"
+B210_PLACER=static B210_THREADS=4 \
+  bash build.sh /path/to/B210_Project_Firmwire b210-dual-fabric "$HOME/b210-work/dual"
 ```
 
-Each output directory must be new. Use `b210-siso-strobe` as the variant for
-single-radio synthesis. The flow
+Each output directory must be new. On WSL, use the Linux filesystem for
+the work directory to avoid slow FASM writes to Windows mounts. The example
+uses the static placer from the dual-radio trial. `B210_PLACER=heap` selects
+nextpnr's default placer. Use `b210-siso-strobe` for single-radio synthesis.
+The flow
 simulates PPS, synthesizes the design, checks the IQ strobe in each radio,
 routes, then assembles the `.bit` and raw UHD `.bin`. Logs and SHA-256 are
 written to the work directory. Assembly derives a small set of board I/O
 settings from the locally supplied stock reference, checks the MMCM
 configuration and compares the device IDCODE.
 
-Run `bash tests/check-uart.sh work/dual/src work/dual/uart-test` to check
-the 38400 baud UART-to-CHDR path with a synthetic NMEA line.
+Run `bash tests/check-uart.sh "$HOME/b210-work/dual/src" "$HOME/b210-work/dual/uart-test"`
+to check the 38400 baud UART-to-CHDR path with a synthetic NMEA line.
 
 The tested tool builds were Yosys 0.67, nextpnr-himbaechel 1.0.0,
 fpga-as 0.0.1 and Project X-Ray 0.9.2. The tested Kintex-7 chip database

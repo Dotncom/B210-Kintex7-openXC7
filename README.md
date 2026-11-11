@@ -60,6 +60,20 @@ The package overlay uses the FFG676 pin map and generic openXC7 timing
 when the exact FFG676-2 record is missing. The timing report is a routing
 estimate. Hardware validation of a new image is a separate step.
 
+## Dual-radio build result
+
+The replacement clock and PPS build passed PPS simulation, the 38400 baud
+UART fixture, and the synthesized IQ strobe check for both receive channels.
+Router2 converged with zero overused wires and zero architecture failures.
+The post-route estimates were 136.50 MHz for the 100 MHz bus and 100.12 MHz
+for the radio clock constrained at 61.44 MHz. Bitstream readback matched the
+reference's named MMCM settings and the `0x03651093` device IDCODE.
+
+The locally assembled raw image is 11,443,612 bytes, with SHA-256
+`e40f3f58e29aaa830e94201a0fe7c251e9cd44f6abf233bd374bc0bb8ff934fb`.
+The next validation step is a temporary UHD load on the physical clone,
+followed by tests of simultaneous channels, NMEA reception and PPS.
+
 ## GNSS on the host
 
 In a checkout of [Ettus UHD v4.3.0.0](https://github.com/EttusResearch/uhd/tree/v4.3.0.0),

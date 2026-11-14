@@ -1,0 +1,21 @@
+--- a/common/place/placer_static.cc
++++ b/common/place/placer_static.cc
+@@ -893,15 +893,14 @@
+             net.x_max_exp.at(axis) = 0;
+             // update bounding box
+             compute_bounds(net, axis, ref);
+-            // compute rough center to subtract from exponents to avoid FP issues (from replace)
+-            float c = (net.b1.at(axis) + net.b0.at(axis)) / 2.f;
++            // Normalize each weighted sum by its largest exponential term.
+             for (auto &port : net.ports) {
+                 if (!port.ref.cell)
+                     continue;
+                 RealPair loc = cell_loc(port.ref.cell, ref);
+                 // update weighted-average model exponents
+-                float emin = (c - loc.at(axis)) * wl_coeff.at(axis);
+-                float emax = (loc.at(axis) - c) * wl_coeff.at(axis);
++                double emin = (double(net.b0.at(axis)) - loc.at(axis)) * wl_coeff.at(axis);
++                double emax = (double(loc.at(axis)) - net.b1.at(axis)) * wl_coeff.at(axis);
+ 
+                 if (emin > min_wirelen_force) {
+                     port.min_exp.at(axis) = std::exp(emin);

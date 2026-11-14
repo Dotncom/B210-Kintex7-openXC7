@@ -9,6 +9,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("netlist", type=Path)
     parser.add_argument("--expect-dead", action="store_true")
+    parser.add_argument("--iq-passthrough", action="store_true")
     parser.add_argument("--radios", type=int, choices=(1, 2), default=1)
     args = parser.parse_args()
     design = json.loads(args.netlist.read_bytes())
@@ -26,6 +27,11 @@ def main():
         else:
             assert all(len(value) == 1 and isinstance(value[0], int) for value in bits)
             assert bits[0] == bits[1] and all(value == bits[4] for value in bits[4:])
+        if args.iq_passthrough:
+            iq = nets[radio + "obrii_ddc_iq"]["bits"]
+            assert len(iq) == 32 and iq == nets[radio + "sample_rx"]["bits"]
+            assert bits[5] == nets[radio + "obrii_ddc_valid"]["bits"]
+            print(f"RX {channel}: IQ16 and valid match the original netlist connections")
 
 
 if __name__ == "__main__":

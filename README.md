@@ -43,6 +43,8 @@ Each output directory must be new. On WSL, use the Linux filesystem for
 the work directory to avoid slow FASM writes to Windows mounts. The example
 uses the static placer from the dual-radio trial. `B210_PLACER=heap` selects
 nextpnr's default placer. Use `b210-siso-strobe` for single-radio synthesis.
+Set `B210_NEXTPNR` to an alternate compatible nextpnr executable if needed.
+`B210_NEXTPNR_ROOT` still supplies the Xilinx metadata and database.
 The flow
 simulates PPS, synthesizes the design, checks the IQ strobe in each radio,
 routes, then assembles the `.bit` and raw UHD `.bin`. Logs and SHA-256 are
@@ -52,6 +54,39 @@ configuration and compares the device IDCODE.
 
 Run `bash tests/check-uart.sh "$HOME/b210-work/dual/src" "$HOME/b210-work/dual/uart-test"`
 to check the 38400 baud UART-to-CHDR path with a synthetic NMEA line.
+
+## Editable FPGA Lab projects
+
+Both published B210 variants can be opened as editable source projects. From
+this checkout, materialize a project from the matching vendor HDL and recipe:
+
+```sh
+python3 project.py create /path/to/B210_Project_Firmwire b210-dual-fabric ~/b210-design
+python3 project.py inspect ~/b210-design
+B210_PLACER=static B210_THREADS=4 bash build.sh /path/to/B210_Project_Firmwire \
+    b210-dual-fabric ~/b210-work/dual-edited --project ~/b210-design
+```
+
+Open `.obrii-b210.json` in FPGA Lab and edit the HDL, `pins.xdc` or `clocks.sdc`
+under `src/`. To add modules and headers, place `.v`, `.sv`, `.vh` and `.svh`
+files under `src/user/` and instantiate the modules from the design. Added
+modules enter Yosys in sorted order. Each build stages fresh vendor sources,
+reapplies the published patches and checks that their hashes match the project
+baseline before copying edits. `project-sources.json` in the build directory
+records the inputs that changed. The build retains the B210 pin routing,
+timing, I/O assembly, and stock-reference checks. Existing projects are never
+overwritten by `create`. Use `b210-siso-strobe` to start a single-radio design.
+
+An optional `B210_IQ_PIPELINE` points to the IQ16 passthrough exported by FPGA
+Lab. It is inserted after DDC and before both RX strobe consumers, and
+synthesis checks the bit and strobe wiring in each active radio. The supported
+block is combinational and leaves the USB format and sample rate unchanged.
+
+For the static placer, `patches/nextpnr-static-normalize.patch` corrects
+exponential overflow in the weighted wirelength calculation. If this affects
+your compatible nextpnr checkout, apply it from that checkout with
+`git apply /path/to/B210-Kintex7-openXC7/patches/nextpnr-static-normalize.patch`,
+rebuild nextpnr, and point `B210_NEXTPNR` to the rebuilt executable.
 
 The tested tool builds were Yosys 0.67, nextpnr-himbaechel 1.0.0,
 fpga-as 0.0.1 and Project X-Ray 0.9.2. The tested Kintex-7 chip database
